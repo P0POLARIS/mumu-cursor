@@ -3417,12 +3417,15 @@ class PreviewPanel : Panel
 // ================================================================ 裁剪对话框
 class CropForm : Form
 {
+    // 遮罩（圆/方）固定在框中间；图片保持比例，拖动移动、滚轮缩放；确定时按遮罩在原图上的位置裁
     readonly Bitmap src;
     readonly int outSize;
     readonly bool circle;
-    float zoom = 1f;
-    PointF pan = PointF.Empty;
-    bool drag; Point lastPt;
+    static readonly Rectangle Box = new Rectangle(18, 44, 524, 440);
+    const float MaskSize = 320f;
+    float scale, minScale, maxScale;   // 原图像素 → 窗口像素
+    float ix, iy;                // 图片中心（窗口坐标）
+    bool drag; PointF grab;
     public Bitmap Result;
 
     public CropForm(string path, int outSize, bool circle, string label)
@@ -3435,7 +3438,8 @@ class CropForm : Form
         BackColor = Color.FromArgb(24, 23, 30);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
-        var tip = new Label { Text = label + "：拖动移动，滚轮缩放", ForeColor = Color.FromArgb(170, 166, 184), AutoSize = true, Location = new Point(18, 12) };
+        DoubleBuffered = true;
+        var tip = new Label { Text = (label.Length > 0 ? label + "：" : "") + "拖动图片调整位置，滚轮缩放", ForeColor = Color.FromArgb(170, 166, 184), AutoSize = true, Location = new Point(18, 12) };
         Controls.Add(tip);
         var ok = new Btn { Text = "确定", Location = new Point(330, 500), Size = new Size(200, 44) };
         ok.Click += (a, b) => { Result = Render(); DialogResult = DialogResult.OK; Close(); };
@@ -3443,33 +3447,58 @@ class CropForm : Form
         var cancel = new Btn { Text = "取消", Primary = false, Location = new Point(180, 500), Size = new Size(140, 44) };
         cancel.Click += (a, b) => { DialogResult = DialogResult.Cancel; Close(); };
         Controls.Add(cancel);
-        MouseWheel += (a, b) => { zoom = Math.Max(0.2f, Math.Min(4f, zoom * (b.Delta > 0 ? 1.1f : 0.9f))); Invalidate(); };
-        MouseDown += (a, b) => { drag = true; lastPt = b.Location; };
-        MouseUp += (a, b) => { drag = false; };
-        MouseMove += (a, b) => { if (drag) { pan.X += b.X - lastPt.X; pan.Y += b.Y - lastPt.Y; lastPt = b.Location; Invalidate(); } };
+
+        // 初始：图片短边正好铺满遮罩
+        scale = MaskSize / Math.Min(src.Width, src.Height);
+        minScale = scale * 0.2f; maxScale = scale * 8f;
+        ix = Box.X + Box.Width / 2f; iy = Box.Y + Box.Height / 2f;
+
+        MouseWheel += (a, b) =>
+        {
+            // 以鼠标位置为中心缩放，指着哪里就放大哪里
+            float f = b.Delta > 0 ? 1.1f : 1f / 1.1f;
+            float ns = Math.Max(minScale, Math.Min(maxScale, scale * f));
+            f = ns / scale; scale = ns;
+            ix = b.X + (ix - b.X) * f; iy = b.Y + (iy - b.Y) * f;
+            Clamp(); Invalidate();
+        };
+        MouseDown += (a, b) => { if (b.Button == MouseButtons.Left && Box.Contains(b.Location)) { drag = true; grab = new PointF(b.X - ix, b.Y - iy); Cursor = Cursors.SizeAll; } };
+        MouseUp += (a, b) => { drag = false; Cursor = Cursors.Default; };
+        MouseMove += (a, b) => { if (!drag) return; ix = b.X - grab.X; iy = b.Y - grab.Y; Clamp(); Invalidate(); };
     }
+
+    // 遮罩中心始终落在图片上，图片不会被拖丢
+    void Clamp()
+    {
+        float hw = src.Width * scale / 2f, hh = src.Height * scale / 2f;
+        float cx = Box.X + Box.Width / 2f, cy = Box.Y + Box.Height / 2f;
+        ix = Math.Max(cx - hw, Math.Min(cx + hw, ix));
+        iy = Math.Max(cy - hh, Math.Min(cy + hh, iy));
+    }
+
+    RectangleF ImgRect { get { float w = src.Width * scale, h = src.Height * scale; return new RectangleF(ix - w / 2f, iy - h / 2f, w, h); } }
+    RectangleF MaskRect { get { return new RectangleF(Box.X + (Box.Width - MaskSize) / 2f, Box.Y + (Box.Height - MaskSize) / 2f, MaskSize, MaskSize); } }
 
     Bitmap Render()
     {
-        int side = Math.Min(src.Width, src.Height);
-        float s = (float)side / outSize;
         var dst = new Bitmap(outSize, outSize, PixelFormat.Format32bppArgb);
+        var img = ImgRect;
+        float k = src.Width / img.Width;      // 窗口像素 → 原图像素
+        var m = MaskRect;
+        var srcRect = new RectangleF((m.X - img.X) * k, (m.Y - img.Y) * k, m.Width * k, m.Height * k);
         using (var g = Graphics.FromImage(dst))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.Clear(Color.Transparent);
             if (circle)
-            {
                 using (var p = new GraphicsPath())
                 {
                     p.AddEllipse(0, 0, outSize - 1, outSize - 1);
                     g.SetClip(p);
                 }
-            }
-            float draw = outSize * zoom;
-            float cx = outSize / 2f + pan.X, cy = outSize / 2f + pan.Y;
-            g.DrawImage(src, new RectangleF(cx - draw / 2, cy - draw / 2, draw, draw));
+            g.DrawImage(src, new RectangleF(0, 0, outSize, outSize), srcRect, GraphicsUnit.Pixel);
         }
         return dst;
     }
@@ -3479,19 +3508,25 @@ class CropForm : Form
         base.OnPaint(e);
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var box = new Rectangle(18, 44, 524, 440);
-        using (var b = new SolidBrush(Color.FromArgb(16, 15, 20))) g.FillRectangle(b, box);
-        float draw = Math.Min(box.Width, box.Height) * zoom;
-        float cx = box.X + box.Width / 2f + pan.X, cy = box.Y + box.Height / 2f + pan.Y;
+        using (var b = new SolidBrush(Color.FromArgb(16, 15, 20))) g.FillRectangle(b, Box);
         var st = g.Save();
-        g.SetClip(box);
+        g.SetClip(Box);
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        g.DrawImage(src, new RectangleF(cx - draw / 2, cy - draw / 2, draw, draw));
+        g.DrawImage(src, ImgRect);
+        // 遮罩外压暗，一眼看出会裁成什么样
+        var m = MaskRect;
+        using (var outside = new Region(Box))
+        using (var hole = new GraphicsPath())
+        {
+            if (circle) hole.AddEllipse(m); else hole.AddRectangle(m);
+            outside.Exclude(hole);
+            using (var dim = new SolidBrush(Color.FromArgb(150, 10, 10, 14))) g.FillRegion(dim, outside);
+        }
         g.Restore(st);
         using (var pen = new Pen(Color.FromArgb(255, 128, 170), 2f))
         {
-            if (circle) g.DrawEllipse(pen, cx - outSize / 2f, cy - outSize / 2f, outSize, outSize);
-            else g.DrawRectangle(pen, cx - outSize / 2f, cy - outSize / 2f, outSize, outSize);
+            if (circle) g.DrawEllipse(pen, m.X, m.Y, m.Width, m.Height);
+            else g.DrawRectangle(pen, m.X, m.Y, m.Width, m.Height);
         }
     }
 }
