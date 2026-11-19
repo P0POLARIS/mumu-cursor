@@ -92,6 +92,8 @@ static class Nat
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr LoadImageW(IntPtr inst, string name, int type, int cx, int cy, int flags);
     [DllImport("user32.dll")] public static extern bool SetSystemCursor(IntPtr hcur, int id);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool SystemParametersInfoW(int act, int p, IntPtr pv, int win);
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW")] public static extern bool SystemParametersInfoGetInt(int act, int p, ref int pv, int win);
+    public const int SPI_GETMOUSETRAILS = 0x005E, SPI_SETMOUSETRAILS = 0x005D;
     [DllImport("user32.dll")] public static extern bool DestroyWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] public static extern IntPtr CopyIcon(IntPtr h);
@@ -743,6 +745,7 @@ static class CursorSwitch
             SetBaseSize(bmp.Width);
             Thread.Sleep(60);
             Nat.SetSystemCursor(h, Nat.OCR_NORMAL);
+            SoftCursor(true);
             LastLog = "static: set cur ok " + bmp.Width + "px";
         }
         Applied = true;
@@ -864,6 +867,35 @@ static class CursorSwitch
         return null;
     }
 
+    // 显卡的硬件光标层不走桌面的颜色处理，部分显卡/显示器上彩色光标会明显发淡（N 卡实测）。
+    // MouseTrails = -1 让 Windows 改用软件绘制光标，和桌面一起合成，颜色就对了。
+    // 只改当前会话（不写注册表，重启自动复原）；原值记在 HKCU\Software\MUMUCursor，被强杀后 --restore / 下次启动也能还原。
+    public static void SoftCursor(bool on)
+    {
+        try
+        {
+            using (var k = Registry.CurrentUser.CreateSubKey(@"Software\MUMUCursor"))
+            {
+                if (on)
+                {
+                    int cur = 0;
+                    Nat.SystemParametersInfoGetInt(Nat.SPI_GETMOUSETRAILS, 0, ref cur, 0);
+                    if (cur == -1) return;
+                    if (k.GetValue("TrailsBackup") == null) k.SetValue("TrailsBackup", cur, RegistryValueKind.DWord);
+                    Nat.SystemParametersInfoW(Nat.SPI_SETMOUSETRAILS, -1, IntPtr.Zero, 0);
+                }
+                else
+                {
+                    object v = k.GetValue("TrailsBackup");
+                    if (v == null) return;
+                    Nat.SystemParametersInfoW(Nat.SPI_SETMOUSETRAILS, Convert.ToInt32(v), IntPtr.Zero, 0);
+                    k.DeleteValue("TrailsBackup", false);
+                }
+            }
+        }
+        catch { }
+    }
+
     public static void Restore()
     {
         lock (gate)
@@ -874,6 +906,7 @@ static class CursorSwitch
             {
                 // 无论如何都让 Windows 重载一次方案，保证不会停留在透明光标
                 try { Nat.SystemParametersInfoW(Nat.SPI_SETCURSORS, 0, IntPtr.Zero, Nat.SPIF_SENDCHANGE); } catch { }
+                SoftCursor(false);         // 硬件光标交还给显卡
                 RestoreBaseSize();         // 把被我们改过的全局“指针大小”写回去
                 ResetBaseSizeIfBroken();   // 兜底：旧版留下的 128
                 Applied = false;
