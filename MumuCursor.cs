@@ -1553,6 +1553,11 @@ static class CurArt
 }
 
 // ================================================================ 素材
+class BadImageException : Exception
+{
+    public BadImageException(string msg, Exception inner) : base(msg, inner) { }
+}
+
 static class Art
 {
     static readonly Dictionary<string, Bitmap> cache = new Dictionary<string, Bitmap>();
@@ -1576,9 +1581,45 @@ static class Art
         throw new Exception("missing " + suffix);
     }
 
+    // 读任意图片：先走 GDI+；GDI+ 不认识的格式（WebP、HEIC、AVIF……常见于改了扩展名的表情包）
+    // 会抛 OutOfMemoryException，这时改走 WIC（系统装了对应解码器就能读）
+    public static Bitmap ReadImage(string path)
+    {
+        try
+        {
+            using (var img = Image.FromFile(path)) return new Bitmap(img);
+        }
+        catch (OutOfMemoryException) { }
+        catch (ArgumentException) { }
+        try
+        {
+            using (var fs = File.OpenRead(path))
+            {
+                var dec = System.Windows.Media.Imaging.BitmapDecoder.Create(fs,
+                    System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
+                    System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+                var frame = new System.Windows.Media.Imaging.FormatConvertedBitmap(
+                    dec.Frames[0], System.Windows.Media.PixelFormats.Bgra32, null, 0);
+                int w = frame.PixelWidth, h = frame.PixelHeight, stride = w * 4;
+                var px = new byte[stride * h];
+                frame.CopyPixels(px, stride, 0);
+                var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+                var data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                for (int y = 0; y < h; y++)
+                    System.Runtime.InteropServices.Marshal.Copy(px, y * stride, data.Scan0 + y * data.Stride, stride);
+                bmp.UnlockBits(data);
+                return bmp;
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new BadImageException("这张图片的格式读不了（" + Path.GetExtension(path) + "）。\n可以先用画图打开另存为 PNG 再上传。", ex);
+        }
+    }
+
     public static Bitmap LoadFile(string path, int targetH)
     {
-        using (var tmp = Image.FromFile(path))
+        using (var tmp = ReadImage(path))
         {
             var src = new Bitmap(tmp);
             int h = targetH, w = Math.Max(1, (int)Math.Round(src.Width * (double)targetH / src.Height));
@@ -2508,7 +2549,10 @@ class MainForm : Form
         using (var d = new OpenFileDialog { Filter = "图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif", Title = "选择主体图片" })
         {
             if (d.ShowDialog(this) != DialogResult.OK) return;
-            using (var cf = new CropForm(d.FileName, 256, true, "圆形遮罩"))
+            CropForm cf0;
+            try { cf0 = new CropForm(d.FileName, 256, true, "圆形遮罩"); }
+            catch (BadImageException ex) { MessageBox.Show(this, ex.Message, "MUMU 光标", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            using (var cf = cf0)
             {
                 if (cf.ShowDialog(this) != DialogResult.OK) return;
                 try
@@ -2535,7 +2579,10 @@ class MainForm : Form
         using (var d = new OpenFileDialog { Filter = "图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif", Title = "选择吊起物品图片" })
         {
             if (d.ShowDialog(this) != DialogResult.OK) return;
-            using (var cf = new CropForm(d.FileName, 192, false, ""))
+            CropForm cf0;
+            try { cf0 = new CropForm(d.FileName, 192, false, ""); }
+            catch (BadImageException ex) { MessageBox.Show(this, ex.Message, "MUMU 光标", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            using (var cf = cf0)
             {
                 if (cf.ShowDialog(this) != DialogResult.OK) return;
                 try
@@ -3428,7 +3475,7 @@ class CropForm : Form
     public CropForm(string path, int outSize, bool circle, string label)
     {
         this.outSize = outSize; this.circle = circle;
-        using (var tmp = Image.FromFile(path)) src = new Bitmap(tmp);
+        using (var tmp = Art.ReadImage(path)) src = new Bitmap(tmp);
         Text = "调整图片";
         ClientSize = new Size(560, 560);
         StartPosition = FormStartPosition.CenterParent;

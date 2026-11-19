@@ -27,6 +27,9 @@ python build_exe.py
 ```bat
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ ^
   /out:MUMU光标.exe /win32icon:assets\app.ico ^
+  /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Xaml.dll ^
+  /r:C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll ^
+  /r:C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll ^
   /resource:assets\body_default.png /resource:assets\body_avatar.png ^
   ... 其余 assets 下的 png/wav/cur ...
   MumuCursor.cs

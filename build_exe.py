@@ -5,6 +5,7 @@ import os, re, subprocess, sys, pathlib, time
 
 ROOT = pathlib.Path(__file__).resolve().parent
 CSC = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+WPF = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF"
 
 # 资源：所有 png / wav 以文件名嵌入
 res = []
@@ -37,6 +38,8 @@ def build(target, out):
         f"/out:{out}",
         "/r:System.dll", "/r:System.Drawing.dll", "/r:System.Windows.Forms.dll",
         "/r:System.Core.dll",
+        # WebP 等 GDI+ 读不了的图片走 WIC 解码（WPF 的 BitmapDecoder，系统自带）
+        f"/r:{WPF}\\PresentationCore.dll", f"/r:{WPF}\\WindowsBase.dll", "/r:System.Xaml.dll",
         f"/win32icon:{ROOT / 'assets' / 'app.ico'}",
     ] + res + [str(ROOT / "MUMUCursor.cs")]
     p = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
