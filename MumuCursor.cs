@@ -344,7 +344,8 @@ class Look
     public float AnchorX, AnchorY;   // 绳子挂点在光标图里的坐标
     public bool DrawBody = true;     // 覆盖层是否画主体（统一方案里主体已经固化进系统光标了）
     public bool HideDeco;            // true = 不画 ③连接线 ④悬挂物（游戏里 / “游戏里”预览）
-    public float BodyDrawX, BodyDrawY, BodyDrawW, BodyDrawH;   // 主体在光标图里的位置（覆盖层可能要补画）
+    public float BodyDrawX, BodyDrawY, BodyDrawW, BodyDrawH;
+    public Rectangle BodySrc;        // 合成光标时实际取的主体区域（裁掉透明边），补画时必须用同一块，否则比例不对   // 主体在光标图里的位置（覆盖层可能要补画）
     public Color RopeColor = Color.FromArgb(52, 44, 58);
     public bool RopeOn = true, RopeGlow = false;
     public bool ClickAnim = true;
@@ -575,9 +576,11 @@ class Pendant
         {
             // 系统切成了别的手型（链接的小手、文本框的 I 型…）：那张图里没有主体，
             // 这里按同样的位置补画上去，保证 ②③④ 都还在。
+            // 光标图里放的是裁掉透明边后的主体，这里也只取那一块，否则会被压扁
+            Rectangle srcR = L.BodySrc.Width > 0 ? L.BodySrc : new Rectangle(0, 0, L.Body.Width, L.Body.Height);
             g.DrawImage(L.Body,
-                        ox + L.BodyDrawX - L.StaticHotX, oy + L.BodyDrawY - L.StaticHotY,
-                        L.BodyDrawW, L.BodyDrawH);
+                        new RectangleF(ox + L.BodyDrawX - L.StaticHotX, oy + L.BodyDrawY - L.StaticHotY, L.BodyDrawW, L.BodyDrawH),
+                        srcR, GraphicsUnit.Pixel);
         }
     }
 }
@@ -1473,7 +1476,7 @@ static class CurArt
 {
 
     // 找出有像素的范围（透明边裁掉），用小图采样，够快也够准
-    static Rectangle TrimAlpha(Bitmap b)
+    public static Rectangle TrimAlpha(Bitmap b)
     {
         int sw = 64, sh = 64;
         int minX = sw, minY = sh, maxX = -1, maxY = -1;
@@ -1624,6 +1627,7 @@ static class Art
         l.StaticCur = CurArt.Compose(l.Body, l.Pointer, l.HotX, l.HotY, c.CursorSize,
                                      out hx, out hy, out ax, out ay, out bdx, out bdy, out bdw, out bdh);
         l.BodyDrawX = bdx; l.BodyDrawY = bdy; l.BodyDrawW = bdw; l.BodyDrawH = bdh;
+        l.BodySrc = CurArt.TrimAlpha(l.Body);
         l.StaticHotX = hx; l.StaticHotY = hy; l.AnchorX = ax; l.AnchorY = ay;
         l.DrawBody = false;          // 主体已经画进光标图了，覆盖层默认不再重复画
 
